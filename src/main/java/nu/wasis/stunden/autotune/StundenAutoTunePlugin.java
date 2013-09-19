@@ -1,14 +1,20 @@
 package nu.wasis.stunden.autotune;
 
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
 
 import net.xeoh.plugins.base.annotations.PluginImplementation;
 import nu.wasis.stunden.autotune.config.StundenAutoTunePluginConfiguration;
+import nu.wasis.stunden.commons.CommonDateUtils;
+import nu.wasis.stunden.commons.DayStepValidator;
+import nu.wasis.stunden.commons.DayStepValidator.DayStepResult;
 import nu.wasis.stunden.exception.InvalidConfigurationException;
 import nu.wasis.stunden.model.Day;
 import nu.wasis.stunden.model.Entry;
+import nu.wasis.stunden.model.Project;
 import nu.wasis.stunden.model.WorkPeriod;
 import nu.wasis.stunden.plugin.ProcessPlugin;
 import nu.wasis.stunden.util.DateUtils;
@@ -35,15 +41,36 @@ public class StundenAutoTunePlugin implements ProcessPlugin {
 		if (0 >= myConfig.getMinimumDailyWorkDuration()) {
 			throw new InvalidConfigurationException("Param `minimumDailyWorkDuration' should be > 0. I'm outta here...");
 		}
+		final DayStepValidator dayStepValidator = new DayStepValidator(workPeriod.getDays().first().getDate());
+		final List<Day> fakeDays = new LinkedList<>();
 		for (final Day day : workPeriod.getDays()) {
+			if (myConfig.getAddMissingDays()) {
+				final DayStepResult dayStepResult = dayStepValidator.step(day.getDate());
+				if (!dayStepResult.isSuccess()) {
+					LOG.warn("Found missing day(s) between " + DateUtils.DATE_FORMATTER.print(dayStepValidator.getCurrentDate()) + " and " + DateUtils.DATE_FORMATTER.print(day.getDate()) + ".");
+					DateTime dateToAdd = day.getDate().plusDays(1);
+					do {
+						final Day newDay = createFakeDay(dateToAdd, myConfig.getMinimumDailyWorkDuration(), myConfig.getDefaultProjectName());
+						fakeDays.add(newDay);
+						dateToAdd = dateToAdd.plusDays(1);
+					} while (!CommonDateUtils.isSameDay(day.getDate(), dateToAdd));
+				}
+			}
 			if (myConfig.getMinimumDailyWorkDuration() > day.getWorkDuration().getStandardHours()) {
 				fixWorkDuration(myConfig,day);
 			}
 		}
+		workPeriod.getDays().addAll(fakeDays);
 		LOG.info("...done.");
 		return workPeriod;
 	}
 	
+	private Day createFakeDay(final DateTime dateToAdd, final int minimumDailyWorkDuration, final String defaultProjectName) {
+		final DateTime begin = new DateTime(2000, 1, 1, 1, 0);
+		final DateTime end = begin.plusHours(minimumDailyWorkDuration);
+		return new Day(dateToAdd, Arrays.asList(new Entry(begin, end, new Project(defaultProjectName), false)));
+	}
+
 	private void fixWorkDuration(final StundenAutoTunePluginConfiguration myConfig, final Day day) {
 		final Duration missingDuration = createDuration(myConfig.getMinimumDailyWorkDuration()).minus(day.getWorkDuration());
 		LOG.debug("Not enough hours (" + DateUtils.PERIOD_FORMATTER.print(day.getWorkDuration().toPeriod()) + ") for " + DateUtils.DATE_FORMATTER.print(day.getDate()) + ".");
